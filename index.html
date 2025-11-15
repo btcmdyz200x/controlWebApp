@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 BLE 翅膀控制器</title>
+    <!-- 引入 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 确保页面主体居中且美观 */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7fafc;
+        }
+        .container {
+            max-width: 480px;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <!-- 控制面板容器 -->
+    <div class="container bg-white shadow-2xl rounded-xl p-6 md:p-8 w-full border border-indigo-100">
+        
+        <h1 class="3xl font-bold text-indigo-700 mb-2 text-center">BLE 翅膀控制器</h1>
+        <p class="text-sm text-gray-500 mb-6 text-center">恒定速度 420 度/秒，通过 Web 蓝牙控制 ESP32-C3</p>
+
+        <!-- 状态区域 -->
+        <div id="status-card" class="bg-gray-100 p-4 rounded-lg mb-6 flex justify-between items-center transition duration-300">
+            <span id="status-text" class="text-gray-600 font-semibold">状态: 未连接</span>
+            <div id="status-indicator" class="w-3 h-3 rounded-full bg-red-500 shadow-inner"></div>
+        </div>
+
+        <!-- 连接按钮 -->
+        <button id="connect-btn" onclick="connectBLE()" class="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-indigo-700 transition duration-150 transform hover:scale-[1.01] shadow-lg mb-8">
+            连接 ESP32-C3 翅膀
+        </button>
+
+        <!-- 控制按钮区域 -->
+        <div id="control-panel" class="space-y-4 opacity-30 pointer-events-none transition duration-500">
+            <h2 class="text-xl font-semibold text-gray-700 pt-4 border-t border-gray-200">翅膀控制 (恒定速度)</h2>
+
+            <!-- 新增：开始煽动 (A) -->
+            <button onclick="sendCommand('A')" class="w-full bg-blue-500 text-white font-semibold py-3 rounded-lg hover:bg-blue-600 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                <span>开始煽动 (420°/s)</span>
+            </button>
+
+            <!-- 停止/水平复位 (C) -->
+            <button onclick="sendCommand('C')" class="w-full bg-red-500 text-white font-semibold py-3 rounded-lg hover:bg-red-600 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/></svg>
+                <span>停止并复位至水平 (90°)</span>
+            </button>
+
+            <!-- 竖直向上 (T) -->
+            <button onclick="sendCommand('T')" class="w-full bg-green-500 text-white font-semibold py-3 rounded-lg hover:bg-green-600 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="12 19 12 5"/><polyline points="5 12 12 5 19 12"/></svg>
+                <span>保持竖直向上 (0°)</span>
+            </button>
+            
+            <!-- Gemini API Feature -->
+            <h2 class="text-xl font-semibold text-gray-700 pt-6 border-t border-gray-200 mt-6 flex items-center space-x-2">
+                <span class="text-yellow-500">✨</span>
+                <span>AI 创意描述</span>
+            </h2>
+            <button id="ai-describe-btn" onclick="generateScenario()" class="w-full bg-yellow-400 text-gray-800 font-semibold py-3 rounded-lg hover:bg-yellow-500 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
+                <span>✨ 描述当前状态</span>
+            </button>
+            
+            <!-- LLM Output Display -->
+            <div id="llm-output" class="bg-yellow-50 p-4 rounded-lg mt-4 min-h-[50px] border border-yellow-200 text-sm text-gray-700">
+                点击按钮，让 AI 为你的翅膀动作创造一个有趣的场景描述。
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- BLE UUID 配置 (与 C++ 代码匹配的小写 UUID) ---
+        const DEVICE_NAME = 'ESP32C3_BLE_Servo';
+        const SERVICE_UUID = '4fafc201-1fb5-40ca-984a-9a4b1b9c568a'; 
+        const CONTROL_CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8'; 
+
+        let controlCharacteristic = null;
+        let bleDevice = null;
+        
+        // --- 翅膀状态跟踪 (用于 AI 描述) ---
+        let wingState = 'horizontal'; // 'horizontal' | 'upward' | 'swinging'
+        
+        // --- DOM 元素引用 ---
+        const statusText = document.getElementById('status-text');
+        const statusIndicator = document.getElementById('status-indicator');
+        const connectBtn = document.getElementById('connect-btn');
+        const controlPanel = document.getElementById('control-panel');
+        const llmOutput = document.getElementById('llm-output');
+        const aiDescribeBtn = document.getElementById('ai-describe-btn');
+
+        // --- UI 更新函数 ---
+        function updateStatus(text, isConnected) {
+            statusText.textContent = `状态: ${text}`;
+            if (isConnected) {
+                statusIndicator.classList.remove('bg-red-500');
+                statusIndicator.classList.add('bg-green-500');
+                controlPanel.classList.remove('opacity-30', 'pointer-events-none');
+                connectBtn.textContent = '设备已连接';
+                connectBtn.disabled = true;
+            } else {
+                statusIndicator.classList.remove('bg-green-500');
+                statusIndicator.classList.add('bg-red-500');
+                controlPanel.classList.add('opacity-30', 'pointer-events-none');
+                connectBtn.textContent = '连接 ESP32-C3 翅膀';
+                connectBtn.disabled = false;
+            }
+        }
+
+        // --- BLE 连接逻辑 ---
+        async function connectBLE() {
+            if (!navigator.bluetooth) {
+                updateStatus('浏览器不支持 Web Bluetooth API。请使用 Chrome/Edge 并确保在 HTTPS 环境下运行。', false);
+                return;
+            }
+
+            updateStatus('正在扫描设备...', false);
+            connectBtn.disabled = true;
+
+            try {
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: DEVICE_NAME }],
+                    optionalServices: [SERVICE_UUID] 
+                });
+
+                bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+                updateStatus('正在连接 GATT 服务器...', false);
+                const server = await bleDevice.gatt.connect();
+
+                updateStatus('正在获取服务...', false);
+                const service = await server.getPrimaryService(SERVICE_UUID);
+
+                updateStatus('正在获取特性...', false);
+                controlCharacteristic = await service.getCharacteristic(CONTROL_CHAR_UUID);
+                
+                updateStatus('已连接', true);
+
+            } catch (error) {
+                console.error('BLE 连接或操作失败:', error);
+                updateStatus(`连接失败: ${error.message}`, false); 
+                connectBtn.disabled = false;
+                if (bleDevice) {
+                    bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
+                    bleDevice = null;
+                }
+            }
+        }
+
+        // --- BLE 断开连接回调 ---
+        function onDisconnected(event) {
+            const device = event.target;
+            console.log(`设备 ${device.name} 已断开连接。`);
+            updateStatus('已断开连接', false);
+            controlCharacteristic = null;
+            bleDevice = null;
+            // 重置 Web App 状态
+            wingState = 'horizontal'; 
+        }
+
+        // --- 发送命令给 ESP32 (更新状态跟踪) ---
+        async function sendCommand(command) {
+            if (!controlCharacteristic) {
+                console.warn('未连接到特性。请先连接设备。');
+                updateStatus('请先连接设备', false);
+                return;
+            }
+            
+            // 跟踪状态
+            if (command === 'A') {
+                wingState = 'swinging';
+            } else if (command === 'C') {
+                wingState = 'horizontal';
+            } else if (command === 'T') {
+                wingState = 'upward';
+            }
+
+            try {
+                // 将字符串命令转换为 Uint8Array
+                const encoder = new TextEncoder();
+                const data = encoder.encode(command);
+                
+                await controlCharacteristic.writeValue(data);
+                console.log(`发送指令成功: ${command}`);
+
+            } catch (error) {
+                console.error('写入特性失败:', error);
+                updateStatus('发送指令失败', false);
+            }
+        }
+        
+        // --- Gemini API 集成: 生成场景描述 (更新描述内容) ---
+        
+        function getStatusDescription() {
+            let status = '';
+            
+            if (wingState === 'horizontal') {
+                status = "当前翅膀处于停止状态，两个舵机保持在 90 度水平位置。这象征着静止或着陆。";
+            } else if (wingState === 'upward') {
+                status = "当前翅膀处于停止状态，两个舵机保持在 0 度竖直向上位置。这象征着警戒或准备起飞。";
+            } else if (wingState === 'swinging') {
+                status = "当前翅膀正在以恒定的 420 度/秒的高速反向摆动，幅度为 90 度（45°到 135°）。这是一种强劲、持续的煽动动作。";
+            }
+            
+            return `请你作为一个富有想象力的故事叙述者，根据以下翅膀的物理状态，创作一个简短、富有活力的中文场景描述（100字以内）。这个机构是某种微型飞行器或机械昆虫的翅膀。状态描述：${status}`;
+        }
+
+        async function generateScenario() {
+            llmOutput.textContent = '思考中... 请稍候...';
+            aiDescribeBtn.disabled = true;
+
+            const userQuery = getStatusDescription();
+            const apiKey = ""; 
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            // 使用指数退避重试机制
+            const MAX_RETRIES = 3;
+            let attempt = 0;
+            let success = false;
+            let text = '生成失败，请检查连接或重试。';
+            
+            while (attempt < MAX_RETRIES && !success) {
+                attempt++;
+                try {
+                    const payload = {
+                        contents: [{ parts: [{ text: userQuery }] }],
+                        systemInstruction: {
+                            parts: [{ text: "你是一个专业的场景故事叙述者，根据翅膀的物理状态，创造一个简短、富有想象力的中文场景描述。只需输出描述内容，不要包含任何前缀或解释。" }]
+                        },
+                    };
+                    
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    
+                    const result = await response.json();
+                    const candidate = result.candidates?.[0];
+
+                    if (candidate && candidate.content?.parts?.[0]?.text) {
+                        text = candidate.content.parts[0].text;
+                        success = true;
+                    } else {
+                        throw new Error("Gemini API 返回了空内容。");
+                    }
+
+                } catch (error) {
+                    console.error(`Attempt ${attempt} failed:`, error);
+                    if (attempt < MAX_RETRIES) {
+                        const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
+                        console.log(`Retrying in ${delay / 1000}s...`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    }
+                }
+            }
+
+            llmOutput.textContent = success ? text : '生成失败，请检查网络连接或重试。';
+            aiDescribeBtn.disabled = false;
+        }
+
+        // 页面加载时检查 BLE 支持
+        window.onload = () => {
+             if (navigator.bluetooth && window.isSecureContext) {
+                 updateStatus('未连接', false);
+             } else {
+                 updateStatus('Web Bluetooth 不可用或环境不安全 (需要 HTTPS)', false);
+                 connectBtn.disabled = true;
+             }
+        };
+
+    </script>
+</body>
+</html>
