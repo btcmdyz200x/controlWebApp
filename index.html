@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 BLE 翅膀控制器</title>
+    <title>ESP32 BLE 翅膀控制器 - 调速版</title>
     <!-- 引入 Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -15,6 +15,17 @@
         .container {
             max-width: 480px;
         }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #4F46E5;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 3px solid #fff;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+        }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
@@ -22,8 +33,9 @@
     <!-- 控制面板容器 -->
     <div class="container bg-white shadow-2xl rounded-xl p-6 md:p-8 w-full border border-indigo-100">
         
+        <!-- 修正后的标题 -->
         <h1 class="3xl font-bold text-indigo-700 mb-2 text-center">BLE 翅膀控制器</h1>
-        <p class="text-sm text-gray-500 mb-6 text-center">恒定速度 420 度/秒，通过 Web 蓝牙控制 ESP32-C3</p>
+        <p class="text-sm text-gray-500 mb-6 text-center">可变速度范围：360°/s 到 700°/s</p>
 
         <!-- 状态区域 -->
         <div id="status-card" class="bg-gray-100 p-4 rounded-lg mb-6 flex justify-between items-center transition duration-300">
@@ -38,40 +50,41 @@
 
         <!-- 控制按钮区域 -->
         <div id="control-panel" class="space-y-4 opacity-30 pointer-events-none transition duration-500">
-            <h2 class="text-xl font-semibold text-gray-700 pt-4 border-t border-gray-200">翅膀控制 (恒定速度)</h2>
+            <h2 class="text-xl font-semibold text-gray-700 pt-4 border-t border-gray-200 mb-4">速度与动作控制</h2>
 
-            <!-- 新增：开始煽动 (A) -->
-            <button onclick="sendCommand('A')" class="w-full bg-blue-500 text-white font-semibold py-3 rounded-lg hover:bg-blue-600 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                <span>开始煽动 (420°/s)</span>
-            </button>
-
-            <!-- 停止/水平复位 (C) -->
-            <button onclick="sendCommand('C')" class="w-full bg-red-500 text-white font-semibold py-3 rounded-lg hover:bg-red-600 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/></svg>
-                <span>停止并复位至水平 (90°)</span>
-            </button>
-
-            <!-- 竖直向上 (T) -->
-            <button onclick="sendCommand('T')" class="w-full bg-green-500 text-white font-semibold py-3 rounded-lg hover:bg-green-600 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="12 19 12 5"/><polyline points="5 12 12 5 19 12"/></svg>
-                <span>保持竖直向上 (0°)</span>
-            </button>
-            
-            <!-- Gemini API Feature -->
-            <h2 class="text-xl font-semibold text-gray-700 pt-6 border-t border-gray-200 mt-6 flex items-center space-x-2">
-                <span class="text-yellow-500">✨</span>
-                <span>AI 创意描述</span>
-            </h2>
-            <button id="ai-describe-btn" onclick="generateScenario()" class="w-full bg-yellow-400 text-gray-800 font-semibold py-3 rounded-lg hover:bg-yellow-500 transition duration-150 shadow-md flex items-center justify-center space-x-2 text-lg">
-                <span>✨ 描述当前状态</span>
-            </button>
-            
-            <!-- LLM Output Display -->
-            <div id="llm-output" class="bg-yellow-50 p-4 rounded-lg mt-4 min-h-[50px] border border-yellow-200 text-sm text-gray-700">
-                点击按钮，让 AI 为你的翅膀动作创造一个有趣的场景描述。
+            <!-- 速度滑块 -->
+            <div class="speed-control bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <label for="speed-slider" class="block text-lg font-medium text-gray-700 mb-2">
+                    当前转速: <span id="speed-value" class="text-indigo-600 font-bold">360</span> 度/秒
+                </label>
+                <input type="range" id="speed-slider" min="360" max="700" value="360" 
+                       oninput="document.getElementById('speed-value').textContent = this.value; sendSpeed(this.value);" 
+                       onchange="sendSpeed(this.value);"
+                       class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer range-lg">
+                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>360°/s (慢)</span>
+                    <span>700°/s (快)</span>
+                </div>
             </div>
 
+            <!-- 动作按钮 -->
+            <div class="grid grid-cols-3 gap-3 pt-4">
+                <!-- 开始煽动 (A) -->
+                <button onclick="sendCommand('A')" class="col-span-1 bg-blue-500 text-white font-semibold py-3 rounded-lg hover:bg-blue-600 transition duration-150 shadow-md text-sm">
+                    开始煽动
+                </button>
+
+                <!-- 停止/水平复位 (C) -->
+                <button onclick="sendCommand('C')" class="col-span-1 bg-red-500 text-white font-semibold py-3 rounded-lg hover:bg-red-600 transition duration-150 shadow-md text-sm">
+                    停止/水平 (90°)
+                </button>
+
+                <!-- 竖直向上 (T) -->
+                <button onclick="sendCommand('T')" class="col-span-1 bg-green-500 text-white font-semibold py-3 rounded-lg hover:bg-green-600 transition duration-150 shadow-md text-sm">
+                    竖直向上 (0°)
+                </button>
+            </div>
+            
         </div>
     </div>
 
@@ -84,7 +97,7 @@
         let controlCharacteristic = null;
         let bleDevice = null;
         
-        // --- 翅膀状态跟踪 (用于 AI 描述) ---
+        // --- 翅膀状态跟踪 ---
         let wingState = 'horizontal'; // 'horizontal' | 'upward' | 'swinging'
         
         // --- DOM 元素引用 ---
@@ -92,8 +105,8 @@
         const statusIndicator = document.getElementById('status-indicator');
         const connectBtn = document.getElementById('connect-btn');
         const controlPanel = document.getElementById('control-panel');
-        const llmOutput = document.getElementById('llm-output');
-        const aiDescribeBtn = document.getElementById('ai-describe-btn');
+        // AI相关的DOM引用已移除
+        const speedSlider = document.getElementById('speed-slider');
 
         // --- UI 更新函数 ---
         function updateStatus(text, isConnected) {
@@ -141,6 +154,11 @@
                 controlCharacteristic = await service.getCharacteristic(CONTROL_CHAR_UUID);
                 
                 updateStatus('已连接', true);
+
+                // --- 确保连接成功后立即发送滑块上的初始速度值 ---
+                const initialSpeed = speedSlider.value;
+                await sendSpeed(initialSpeed);
+                // -------------------------------------------------------------
 
             } catch (error) {
                 console.error('BLE 连接或操作失败:', error);
@@ -195,77 +213,27 @@
             }
         }
         
-        // --- Gemini API 集成: 生成场景描述 (更新描述内容) ---
+        // --- 发送速度值给 ESP32 ---
+        async function sendSpeed(speedValue) {
+            if (!controlCharacteristic) {
+                // 如果未连接，则不发送速度命令，防止出现错误
+                return;
+            }
+            
+            try {
+                // 速度值作为字符串发送，例如 "530"
+                const encoder = new TextEncoder();
+                const data = encoder.encode(String(speedValue));
+                
+                await controlCharacteristic.writeValue(data);
+                console.log(`发送速度成功: ${speedValue} deg/s`);
+
+            } catch (error) {
+                console.error('写入速度失败:', error);
+            }
+        }
         
-        function getStatusDescription() {
-            let status = '';
-            
-            if (wingState === 'horizontal') {
-                status = "当前翅膀处于停止状态，两个舵机保持在 90 度水平位置。这象征着静止或着陆。";
-            } else if (wingState === 'upward') {
-                status = "当前翅膀处于停止状态，两个舵机保持在 0 度竖直向上位置。这象征着警戒或准备起飞。";
-            } else if (wingState === 'swinging') {
-                status = "当前翅膀正在以恒定的 420 度/秒的高速反向摆动，幅度为 90 度（45°到 135°）。这是一种强劲、持续的煽动动作。";
-            }
-            
-            return `请你作为一个富有想象力的故事叙述者，根据以下翅膀的物理状态，创作一个简短、富有活力的中文场景描述（100字以内）。这个机构是某种微型飞行器或机械昆虫的翅膀。状态描述：${status}`;
-        }
-
-        async function generateScenario() {
-            llmOutput.textContent = '思考中... 请稍候...';
-            aiDescribeBtn.disabled = true;
-
-            const userQuery = getStatusDescription();
-            const apiKey = ""; 
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-
-            // 使用指数退避重试机制
-            const MAX_RETRIES = 3;
-            let attempt = 0;
-            let success = false;
-            let text = '生成失败，请检查连接或重试。';
-            
-            while (attempt < MAX_RETRIES && !success) {
-                attempt++;
-                try {
-                    const payload = {
-                        contents: [{ parts: [{ text: userQuery }] }],
-                        systemInstruction: {
-                            parts: [{ text: "你是一个专业的场景故事叙述者，根据翅膀的物理状态，创造一个简短、富有想象力的中文场景描述。只需输出描述内容，不要包含任何前缀或解释。" }]
-                        },
-                    };
-                    
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    
-                    const result = await response.json();
-                    const candidate = result.candidates?.[0];
-
-                    if (candidate && candidate.content?.parts?.[0]?.text) {
-                        text = candidate.content.parts[0].text;
-                        success = true;
-                    } else {
-                        throw new Error("Gemini API 返回了空内容。");
-                    }
-
-                } catch (error) {
-                    console.error(`Attempt ${attempt} failed:`, error);
-                    if (attempt < MAX_RETRIES) {
-                        const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
-                        console.log(`Retrying in ${delay / 1000}s...`);
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                    }
-                }
-            }
-
-            llmOutput.textContent = success ? text : '生成失败，请检查网络连接或重试。';
-            aiDescribeBtn.disabled = false;
-        }
+        // AI相关的函数已移除
 
         // 页面加载时检查 BLE 支持
         window.onload = () => {
