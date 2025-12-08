@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 BLE 翅膀控制器 - 调速版</title>
+    <title>ESP32 BLE 翅膀控制器 - 振幅频率版</title>
     <!-- 引入 Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -15,6 +15,7 @@
         .container {
             max-width: 480px;
         }
+        /* 美化滑块的拖动块 */
         input[type=range]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
@@ -35,7 +36,7 @@
         
         <!-- 修正后的标题 -->
         <h1 class="3xl font-bold text-indigo-700 mb-2 text-center">BLE 翅膀控制器</h1>
-        <p class="text-sm text-gray-500 mb-6 text-center">可变速度范围：360°/s 到 700°/s</p>
+        <p class="text-sm text-gray-500 mb-6 text-center">振幅(°)/频率(Hz) 控制模式</p>
 
         <!-- 状态区域 -->
         <div id="status-card" class="bg-gray-100 p-4 rounded-lg mb-6 flex justify-between items-center transition duration-300">
@@ -48,24 +49,42 @@
             连接 ESP32-C3 翅膀
         </button>
 
-        <!-- 控制按钮区域 -->
-        <div id="control-panel" class="space-y-4 opacity-30 pointer-events-none transition duration-500">
-            <h2 class="text-xl font-semibold text-gray-700 pt-4 border-t border-gray-200 mb-4">速度与动作控制</h2>
+        <!-- 控制面板 (连接后启用) -->
+        <div id="control-panel" class="space-y-6 opacity-30 pointer-events-none transition duration-500">
+            <h2 class="text-xl font-semibold text-gray-700 pt-4 border-t border-gray-200 mb-4">参数调整</h2>
 
-            <!-- 速度滑块 -->
-            <div class="speed-control bg-gray-50 p-4 rounded-lg border border-gray-200">
-                <label for="speed-slider" class="block text-lg font-medium text-gray-700 mb-2">
-                    当前转速: <span id="speed-value" class="text-indigo-600 font-bold">360</span> 度/秒
+            <!-- 1. 振幅滑块 (Amplitude) -->
+            <div class="amp-control bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <label for="amplitude-slider" class="block text-lg font-medium text-gray-700 mb-2">
+                    当前振幅 (A): <span id="amplitude-value" class="text-indigo-600 font-bold">30</span> 度 (0°~60°)
                 </label>
-                <input type="range" id="speed-slider" min="360" max="700" value="360" 
-                       oninput="document.getElementById('speed-value').textContent = this.value; sendSpeed(this.value);" 
-                       onchange="sendSpeed(this.value);"
+                <!-- 范围 0 到 60 度 -->
+                <input type="range" id="amplitude-slider" min="0" max="60" value="30" 
+                       oninput="updateAmplitude(this.value);" 
+                       onchange="sendCombinedCommand();"
                        class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer range-lg">
                 <div class="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>360°/s (慢)</span>
-                    <span>700°/s (快)</span>
+                    <span>0° (静止/水平)</span>
+                    <span>60° (最大向上)</span>
                 </div>
             </div>
+
+            <!-- 2. 频率滑块 (Frequency) -->
+            <div class="freq-control bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <label for="frequency-slider" class="block text-lg font-medium text-gray-700 mb-2">
+                    当前频率 (F): <span id="frequency-value" class="text-indigo-600 font-bold">5.0</span> Hz (1~10 Hz)
+                </label>
+                <!-- 范围 10 到 100，对应 1.0Hz 到 10.0Hz -->
+                <input type="range" id="frequency-slider" min="10" max="100" value="50" 
+                       oninput="updateFrequency(this.value);" 
+                       onchange="sendCombinedCommand();"
+                       class="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer range-lg">
+                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>1.0 Hz (慢)</span>
+                    <span>10.0 Hz (快)</span>
+                </div>
+            </div>
+
 
             <!-- 动作按钮 -->
             <div class="grid grid-cols-3 gap-3 pt-4">
@@ -97,16 +116,21 @@
         let controlCharacteristic = null;
         let bleDevice = null;
         
-        // --- 翅膀状态跟踪 ---
-        let wingState = 'horizontal'; // 'horizontal' | 'upward' | 'swinging'
+        // --- 状态跟踪 ---
+        let currentAmplitude = 30; // 默认值 30°
+        let currentFrequency = 5.0; // 默认值 5.0 Hz
         
         // --- DOM 元素引用 ---
         const statusText = document.getElementById('status-text');
         const statusIndicator = document.getElementById('status-indicator');
         const connectBtn = document.getElementById('connect-btn');
         const controlPanel = document.getElementById('control-panel');
-        // AI相关的DOM引用已移除
-        const speedSlider = document.getElementById('speed-slider');
+        
+        const amplitudeSlider = document.getElementById('amplitude-slider');
+        const frequencySlider = document.getElementById('frequency-slider');
+        const amplitudeValue = document.getElementById('amplitude-value');
+        const frequencyValue = document.getElementById('frequency-value');
+
 
         // --- UI 更新函数 ---
         function updateStatus(text, isConnected) {
@@ -126,6 +150,19 @@
             }
         }
 
+        // --- 滑块值更新函数 (振幅) ---
+        function updateAmplitude(value) {
+            currentAmplitude = parseInt(value, 10);
+            amplitudeValue.textContent = currentAmplitude;
+        }
+
+        // --- 滑块值更新函数 (频率) ---
+        function updateFrequency(value) {
+            // 滑块范围 10-100，表示 1.0Hz - 10.0Hz
+            currentFrequency = (parseInt(value, 10) / 10).toFixed(1);
+            frequencyValue.textContent = currentFrequency;
+        }
+        
         // --- BLE 连接逻辑 ---
         async function connectBLE() {
             if (!navigator.bluetooth) {
@@ -137,6 +174,7 @@
             connectBtn.disabled = true;
 
             try {
+                // 1. 请求设备
                 bleDevice = await navigator.bluetooth.requestDevice({
                     filters: [{ name: DEVICE_NAME }],
                     optionalServices: [SERVICE_UUID] 
@@ -155,14 +193,21 @@
                 
                 updateStatus('已连接', true);
 
-                // --- 确保连接成功后立即发送滑块上的初始速度值 ---
-                const initialSpeed = speedSlider.value;
-                await sendSpeed(initialSpeed);
+                // --- 确保连接成功后立即发送初始参数值 ---
+                sendCombinedCommand();
                 // -------------------------------------------------------------
 
             } catch (error) {
-                console.error('BLE 连接或操作失败:', error);
-                updateStatus(`连接失败: ${error.message}`, false); 
+                // 专门处理用户取消或找不到设备的错误
+                if (error.name === 'NotFoundError') {
+                    updateStatus(`连接失败: 未找到设备 (${DEVICE_NAME})，请确保ESP32已通电并正在广播。`, false); 
+                } else if (error.name === 'NotAllowedError') {
+                    updateStatus('连接失败: 权限被拒绝或设备已配对。', false); 
+                } else {
+                    console.error('BLE 连接或操作失败:', error);
+                    updateStatus(`连接失败: ${error.message}`, false); 
+                }
+                
                 connectBtn.disabled = false;
                 if (bleDevice) {
                     bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
@@ -178,65 +223,83 @@
             updateStatus('已断开连接', false);
             controlCharacteristic = null;
             bleDevice = null;
-            // 重置 Web App 状态
-            wingState = 'horizontal'; 
+        }
+        
+        // --- 发送组合命令 (参数) ---
+        async function sendCombinedCommand() {
+            if (!controlCharacteristic) {
+                console.warn('未连接到特性。参数未发送。');
+                return;
+            }
+            
+            // 组合命令格式: A<amplitude>,F<frequency> (例如: A30,F5.0)
+            const combinedCommand = `A${currentAmplitude},F${currentFrequency}`;
+            
+            try {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(combinedCommand);
+                
+                // 使用指数退避重试机制发送数据
+                await retryWrite(controlCharacteristic, data, combinedCommand);
+
+            } catch (error) {
+                console.error('写入参数失败:', error);
+            }
         }
 
-        // --- 发送命令给 ESP32 (更新状态跟踪) ---
+
+        // --- 发送命令给 ESP32 (动作) ---
         async function sendCommand(command) {
             if (!controlCharacteristic) {
                 console.warn('未连接到特性。请先连接设备。');
                 updateStatus('请先连接设备', false);
                 return;
             }
-            
-            // 跟踪状态
-            if (command === 'A') {
-                wingState = 'swinging';
-            } else if (command === 'C') {
-                wingState = 'horizontal';
-            } else if (command === 'T') {
-                wingState = 'upward';
-            }
 
             try {
-                // 将字符串命令转换为 Uint8Array
+                // 动作命令作为单个字符发送
                 const encoder = new TextEncoder();
                 const data = encoder.encode(command);
                 
-                await controlCharacteristic.writeValue(data);
-                console.log(`发送指令成功: ${command}`);
+                // 使用指数退避重试机制发送数据
+                await retryWrite(controlCharacteristic, data, command);
 
             } catch (error) {
                 console.error('写入特性失败:', error);
                 updateStatus('发送指令失败', false);
             }
         }
-        
-        // --- 发送速度值给 ESP32 ---
-        async function sendSpeed(speedValue) {
-            if (!controlCharacteristic) {
-                // 如果未连接，则不发送速度命令，防止出现错误
-                return;
-            }
-            
-            try {
-                // 速度值作为字符串发送，例如 "530"
-                const encoder = new TextEncoder();
-                const data = encoder.encode(String(speedValue));
-                
-                await controlCharacteristic.writeValue(data);
-                console.log(`发送速度成功: ${speedValue} deg/s`);
 
-            } catch (error) {
-                console.error('写入速度失败:', error);
+        // --- 指数退避重试机制 ---
+        async function retryWrite(characteristic, data, command) {
+            const maxRetries = 3;
+            let delay = 100; // 初始延迟 100ms
+            
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    await characteristic.writeValue(data);
+                    console.log(`发送指令成功: ${command}`);
+                    return; // 成功则返回
+                } catch (error) {
+                    if (i === maxRetries - 1) {
+                        // 最后一次尝试失败，抛出错误
+                        throw error;
+                    }
+                    // 等待指数退避的时间
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2; // 延迟加倍
+                }
             }
         }
         
-        // AI相关的函数已移除
 
-        // 页面加载时检查 BLE 支持
+        // 页面加载时初始化滑块值并检查 BLE 支持
         window.onload = () => {
+             // 初始化滑块显示值
+             updateAmplitude(amplitudeSlider.value);
+             updateFrequency(frequencySlider.value);
+             
+             // 检查是否在安全上下文 (HTTPS) 中
              if (navigator.bluetooth && window.isSecureContext) {
                  updateStatus('未连接', false);
              } else {
